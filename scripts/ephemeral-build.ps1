@@ -17,13 +17,33 @@ param(
     [string]$OutputDir = "",
     [string]$Branch = "main",
     [int]$TimeoutMinutes = 35,
-    [switch]$KeepRepo
+    [switch]$KeepRepo,
+    [switch]$ForceNew
 )
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 [Net.ServicePointManager]::Expect100Continue = $false
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# 兜底：只要临时仓库已经被转成公开，脚本任何一步崩掉都必须先把它转回私有，
+# 绝不能让源码因为一次异常就一直挂在公开仓库上（实测踩过：上传中途 404，收尾没跑到）。
+$repoHidden = $true
+trap {
+    if ($repoUri -and $headers -and -not $repoHidden) {
+        Write-Host "      [兜底] 脚本异常，先把临时仓库转回私有"
+        try {
+            Invoke-RestMethod -Uri $repoUri -Headers $headers -Method Patch `
+                -Body (@{ private = $true } | ConvertTo-Json) -ContentType 'application/json' | Out-Null
+            $repoHidden = $true
+            Write-Host "      已转回私有 $repoUri"
+        } catch {
+            Write-Host "      兜底也失败了（网络或令牌问题），请手动去网页把这个仓库设为私有：$repoUri"
+        }
+    }
+    if ($_) { Write-Host ("      异常：" + $_.Exception.Message.Split([char]10)[0]) }
+    exit 1
+}
 
 $token = $env:GITHUB_TOKEN
 if ([string]::IsNullOrWhiteSpace($token)) { $token = Read-Host "GITHUB_TOKEN（classic，需 repo+workflow）" }
@@ -87,6 +107,27 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Write-Host "      账号 $owner / 源码 $projDir / 产物 $OutputDir"
 
+if ([string]::IsNullOrWhiteSpace($ReuseRepo) -and -not $ForceNew -and [string]::IsNullOrWhiteSpace($RepoName)) {
+    # 优先复用上次留下的临时仓库：GitHub 删仓库要 delete_repo 作用域，没有它就一直堆仓库，
+    # 复用时「临时转公开 -> 编译 -> 取包 -> 转回私有」，效果一样且不落新库。
+    # 先赋值再接管道：直接把 Invoke-RestMethod 塞进管道时它可能把整个 Object[] 当一个对象传下去，
+    # 那样 $_.name 变成"所有仓库名拼成的数组"，-like 会全部命中，可能误把主仓库转公开。
+    $repoList = Invoke-RestMethod -Uri "$api/user/repos?per_page=100&affiliation=owner" -Headers $headers
+    $existing = @($repoList | ForEach-Object { $_ } |
+        Where-Object { $_.name -is [string] -and $_.name -like ($RepoPrefix + '-*') } |
+        Sort-Object updated_at -Descending)
+    if ($existing.Count -gt 0) {
+        $ReuseRepo = [string]$existing[0].name
+        Write-Host "      发现可复用的临时仓库 $ReuseRepo（不再新建；要强制新建加 -ForceNew）"
+    }
+}
+# 双保险：要复用的名字必须真的带临时仓库前缀，否则宁可新建，绝不把别的仓库转公开
+if (-not [string]::IsNullOrWhiteSpace($ReuseRepo) -and $ReuseRepo -notlike ($RepoPrefix + '-*')) {
+    Write-Host "      拒绝复用「$ReuseRepo」：不是 $RepoPrefix-* 临时仓库，改为新建"
+    $ReuseRepo = ""
+    $ForceNew = $true
+}
+
 if (-not [string]::IsNullOrWhiteSpace($ReuseRepo)) {
     $RepoName = $ReuseRepo
     $repoUri = "$api/repos/$owner/$RepoName"
@@ -94,6 +135,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReuseRepo)) {
     if ($null -eq $repo) { throw "找不到要复用的仓库 $owner/$RepoName" }
     Write-Host "[2/7] 复用仓库 $owner/$RepoName，临时转为公开（只有公开仓库的 macOS Runner 免费）"
     Invoke-Patch $repoUri @{ private = $false } | Out-Null
+    $repoHidden = $false
 } else {
     if ([string]::IsNullOrWhiteSpace($RepoName)) {
         $RepoName = "{0}-{1}" -f $RepoPrefix, (Get-Date).ToString('yyMMdd-HHmmss')
@@ -111,17 +153,22 @@ if (-not [string]::IsNullOrWhiteSpace($ReuseRepo)) {
     $repoUri = "$api/repos/$owner/$RepoName"
 }
 
-Write-Host "[3/7] 建 $Branch 分支（先塞一个 README，Git Data API 需要 parent commit）"
-$readmePath = Join-Path $projDir "README.md"
-if (Test-Path $readmePath) {
-    $seed = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($readmePath))
+Write-Host "[3/7] 确保 $Branch 分支存在（Git Data API 需要 parent commit，空仓库先塞一个 README）"
+if ($null -eq (Try-Get "$repoUri/git/ref/heads/$Branch")) {
+    $readmePath = Join-Path $projDir "README.md"
+    if (Test-Path $readmePath) {
+        $seed = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($readmePath))
+    } else {
+        $seed = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("# YZL Launcher iOS (temp build mirror)`n"))
+    }
+    Invoke-Put "$repoUri/contents/README.md" @{
+        message = "chore: seed temp build mirror"
+        content = $seed
+    } | Out-Null
+    Write-Host "      已建 $Branch"
 } else {
-    $seed = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("# YZL Launcher iOS (temp build mirror)`n"))
+    Write-Host "      $Branch 已存在（复用仓库，不重复建）"
 }
-Invoke-Put "$repoUri/contents/README.md" @{
-    message = "chore: seed temp build mirror"
-    content = $seed
-} | Out-Null
 
 Write-Host "[4/7] 上传源码树"
 $skipDirs = @('\.git\', '\build\', '\build-test\', '\build-output\', '\dist\', '\bin\', '\obj\', '\node_modules\', '\.deriveddata\')
@@ -139,9 +186,22 @@ $n = 0
 foreach ($f in $files) {
     $n++
     Write-Progress -Activity "upload" -Status $f.Name -PercentComplete ($n * 100 / $files.Count)
-    $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($f.FullName))
-    $sha = (Invoke-Post "$repoUri/git/blobs" @{ content = $b64; encoding = "base64" }).sha
     $rel = $f.FullName.Substring($projDir.Length + 1) -replace "\\", "/"
+    $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($f.FullName))
+    # 实测会遇到偶发 404（同一份内容上一次还能成功），所以带退避重试，别整轮白跑
+    $sha = $null
+    for ($try = 1; $try -le 4 -and -not $sha; $try++) {
+        try {
+            $sha = (Invoke-Post "$repoUri/git/blobs" @{ content = $b64; encoding = "base64" }).sha
+        } catch {
+            if ($try -ge 4) {
+                Write-Host ("      blob 上传彻底失败：{0} -> {1}" -f $rel, $_.Exception.Message.Split([char]10)[0])
+                throw
+            }
+            Write-Host ("      {0} 第 {1} 次失败，{2} 秒后重试" -f $rel, $try, ($try * 6))
+            Start-Sleep -Seconds ($try * 6)
+        }
+    }
     $mode = if ($rel -match '\.sh$') { "100755" } else { "100644" }
     $tree += @{ path = $rel; mode = $mode; type = "blob"; sha = $sha }
 }
@@ -201,38 +261,52 @@ if ($ok) {
         Remove-Item -Force $zip
         Remove-Item -Recurse -Force $tmpOut
     }
-    if ($got.Count -gt 0) {
-        $info = Join-Path $OutputDir '最新包信息.txt'
-        $lines = @()
-        $lines += ("生成时间(本地): " + (Get-Date).ToString('s'))
-        $lines += ("仓库: $owner/$RepoName   run: $($run.id)   commit: $($run.head_sha)")
-        $lines += ("仓库已删除: " + $(if ($KeepRepo) { '否（-KeepRepo）' } else { '是' }))
-        foreach ($g in $got) {
-            $fi = Get-Item -LiteralPath $g
-            $h = (Get-FileHash -LiteralPath $g -Algorithm SHA256).Hash.ToLower()
-            $lines += ("{0}  {1:N0} bytes  sha256={2}" -f $fi.Name, $fi.Length, $h)
-        }
-        [System.IO.File]::WriteAllLines($info, $lines, (New-Object System.Text.UTF8Encoding($true)))
-        foreach ($g in $got) {
-            $fi = Get-Item -LiteralPath $g
-            Write-Host ("      {0}  {1:N0} bytes" -f $fi.Name, $fi.Length)
-        }
+    $fileLines = @()
+    foreach ($g in $got) {
+        $fi = Get-Item -LiteralPath $g
+        $hash = (Get-FileHash -LiteralPath $g -Algorithm SHA256).Hash.ToLower()
+        $fileLines += ("{0}  {1:N0} bytes  sha256={2}" -f $fi.Name, $fi.Length, $hash)
+        Write-Host ("      {0}  {1:N0} bytes" -f $fi.Name, $fi.Length)
     }
 } else {
     Show-FailureLogs $run
 }
 
-Write-Host "[7/7] 收尾：处理临时仓库"
+Write-Host "[7/7] 收尾：让临时仓库不再公开"
+$repoOutcome = ""
 if ($KeepRepo) {
-    Write-Host "      -KeepRepo：仓库 $owner/$RepoName 保留（公开状态，记得自己删）"
-} elseif ($ok -and $got.Count -gt 0 -and [string]::IsNullOrWhiteSpace($ReuseRepo)) {
-    Invoke-RestMethod -Uri $repoUri -Headers $headers -Method Delete | Out-Null
-    Write-Host "      已删除临时仓库 $owner/$RepoName（源码不再公开）"
-} elseif (-not $ok) {
-    Invoke-Patch $repoUri @{ private = $true } | Out-Null
-    Write-Host "      构建失败：已把 $owner/$RepoName 转为**私有**保留现场，查完用 -ReuseRepo $RepoName 重试"
+    $repoOutcome = "保留公开（-KeepRepo）"
+    Write-Host "      -KeepRepo：仓库 $owner/$RepoName 仍是公开的，调试完记得处理掉"
+} elseif ($ok -and $got.Count -gt 0) {
+    try {
+        Invoke-RestMethod -Uri $repoUri -Headers $headers -Method Delete | Out-Null
+        $repoOutcome = "已删除"
+        Write-Host "      已删除临时仓库 $owner/$RepoName，源码不再公开"
+    } catch {
+        Invoke-Patch $repoUri @{ private = $true } | Out-Null
+        $repoOutcome = "删除被拒（缺 delete_repo 作用域），已转回私有"
+        Write-Host ("      删除被拒：" + $_.Exception.Message.Split([char]10)[0])
+        Write-Host "      已把 $owner/$RepoName 转回**私有**——下次运行会自动复用它（临时公开 -> 编译 -> 转回私有），不会越堆越多。"
+        Write-Host "      想真的删掉：token 勾上 delete_repo 作用域后跑 scripts\delete-repo.ps1 -Prefix $RepoPrefix"
+    }
 } else {
     Invoke-Patch $repoUri @{ private = $true } | Out-Null
-    Write-Host "      没拿到产物：先把 $owner/$RepoName 转私有，避免一直公开挂着"
+    $repoOutcome = "已转私有保留现场"
+    if (-not $ok) {
+        Write-Host "      构建失败：已转私有保留现场（不公开）。修好后重跑会自动复用 $RepoName"
+    } else {
+        Write-Host "      没拿到产物：先转私有，避免一直公开挂着"
+    }
+}
+
+if ($got.Count -gt 0) {
+    $info = Join-Path $OutputDir '最新包信息.txt'
+    $lines = @()
+    $lines += ("生成时间(本地): " + (Get-Date).ToString('s'))
+    $lines += ("仓库: $owner/$RepoName   run: $($run.id)   commit: $($run.head_sha)")
+    $lines += ("构建结论: $($run.conclusion)   仓库处置: $repoOutcome")
+    $lines += $fileLines
+    [System.IO.File]::WriteAllLines($info, $lines, (New-Object System.Text.UTF8Encoding($true)))
+    Write-Host "      清单写入 $info"
 }
 Write-Host "DONE"

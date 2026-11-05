@@ -74,11 +74,14 @@ if ([string]::IsNullOrWhiteSpace($Owner)) { $Owner = $login }
 if ([string]::IsNullOrWhiteSpace($RepoName)) {
     $listed = @()
     try {
+        # 注意：@(Invoke-RestMethod ...) 在 PS 5.1 下会把整个 JSON 数组当成一个对象塞进数组，
+        # 导致 $_.name 变成"所有仓库名"的数组、-like 全部命中。先赋值再走管道才能正确展开。
         if ($Owner -eq $login) {
-            $listed = @(Invoke-RestMethod -Uri "$api/user/repos?per_page=100&affiliation=owner" -Headers $headers)
+            $raw = Invoke-RestMethod -Uri "$api/user/repos?per_page=100&affiliation=owner" -Headers $headers
         } else {
-            $listed = @(Invoke-RestMethod -Uri "$api/users/$Owner/repos?per_page=100" -Headers $headers)
+            $raw = Invoke-RestMethod -Uri "$api/users/$Owner/repos?per_page=100" -Headers $headers
         }
+        $listed = @($raw | ForEach-Object { $_ })
     } catch {
         Write-Host "      列仓库失败（fine-grained token 可能没有 Accounts 读权限）：$($_.Exception.Message.Split([char]10)[0])"
     }
