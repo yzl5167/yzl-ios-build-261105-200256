@@ -1,0 +1,12 @@
+.DS_Store
+build/
+build-test/
+DerivedData/
+build-output/
+Payload/
+*.ipa
+*.tipa
+*.xcuserstate
+xcuserdata/
+YZLLauncher.xcodeproj/
+YZLLauncher/Info.plist
