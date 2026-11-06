@@ -69,8 +69,9 @@ final class AppState: ObservableObject {
     private let sessionStore = AuthSessionStore()
     private(set) var session: StoredSession?
     private let installedStore = InstalledVersionStore()
-    /// M2 接缝：未注入 EngineBridge 时 isAvailable = false，自检会如实标红。
-    private let engine: LauncherEngine = AmethystEngine()
+    /// 引擎选择：fork 环境（dlsym 命中 launchJVM）用 YZLEngineHost 真启动；
+    /// 纯外壳构建维持 M2 接缝实现（AmethystEngine，如实报未接入）。
+    private let engine: LauncherEngine = LauncherEngineFactory.make()
 
     private var authTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
@@ -267,6 +268,14 @@ final class AppState: ObservableObject {
             activeAccountID = offlineAccounts.first?.id ?? account?.id
             persistActiveAccount()
         }
+    }
+
+    /// 设置 / 清除离线账号的本地皮肤（对照 Android 端 SkinScreen 的本地导入）。
+    /// `skinURL` 传 LocalSkinStore 生成的 `yzl-local-skin://` 引用，传 nil 恢复默认。
+    func setOfflineSkin(accountID: String, skinURL: String?) {
+        guard let index = offlineAccounts.firstIndex(where: { $0.id == accountID }) else { return }
+        offlineAccounts[index].skinURL = skinURL
+        OfflineAccountStore().save(offlineAccounts)
     }
 
     // MARK: - Installed versions
@@ -669,12 +678,24 @@ final class AppState: ObservableObject {
                 status: .ok
             ))
         } else {
-            checks.append(LaunchCheck(
-                id: "engine",
-                title: "启动内核",
-                detail: "Amethyst 内核尚未接入（M2）。安装和启动参数已经准备好，接入后即可拉起 JVM。",
-                status: .failed
-            ))
+            // 按 payload 逐件诊断：缺 JRE / 图形 dylib / Java 桥 jar / cacio，
+            // 与「桥未接入」是不同的问题，提示文案分开。
+            let payload = EnginePayloadLocator.scan()
+            if payload.isLaunchable {
+                checks.append(LaunchCheck(
+                    id: "engine",
+                    title: "启动内核",
+                    detail: "引擎件齐备，但启动桥未接入（当前为纯外壳构建）。安装 fork 引擎构建后即可拉起 JVM。",
+                    status: .failed
+                ))
+            } else {
+                checks.append(LaunchCheck(
+                    id: "engine",
+                    title: "启动内核",
+                    detail: "Amethyst 内核尚未安装（\(payload.summary)）。安装与启动参数已就绪，接入后即可拉起 JVM。",
+                    status: .failed
+                ))
+            }
         }
 
         // 通用策略：同一个二进制在所有设备上按运行时可用内存自动收敛，

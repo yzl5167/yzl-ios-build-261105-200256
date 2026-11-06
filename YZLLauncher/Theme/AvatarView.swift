@@ -77,10 +77,15 @@ struct AvatarView: View {
     }
 
     /// 账号或皮肤地址变化时重新取图；任务被 SwiftUI 自动取消，不会写回旧头像。
+    /// `yzl-local-skin://` 引用走 LocalSkinStore 本地文件（离线账号导入的皮肤）。
     @MainActor
     private func reloadTexture() async {
         texture = nil
         guard let raw = skinURL, let url = URL(string: raw) else { return }
+        if let local = LocalSkinStore().load(from: url) {
+            texture = local
+            return
+        }
         texture = await SkinTexture.load(from: url)
     }
 
@@ -98,12 +103,31 @@ struct AvatarView: View {
 }
 
 /// 展示整张 64×64 皮肤贴图（纹理表，不是立体模型）。
+/// 本地皮肤（yzl-local-skin://）不走 AsyncImage，直接读文件。
 struct SkinBodyView: View {
     let size: CGFloat
     let account: MicrosoftAccount?
 
+    @State private var localTexture: UIImage?
+
     var body: some View {
-        if let account, let url = URL(string: account.skinURL ?? "") {
+        if let account, let raw = account.skinURL, let url = URL(string: raw),
+           url.scheme?.lowercased() == LocalSkinStore.scheme {
+            Group {
+                if let localTexture {
+                    Image(uiImage: localTexture)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: size, height: size)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else {
+                    AvatarView(size: size, account: account)
+                }
+            }
+            .task(id: raw) {
+                localTexture = LocalSkinStore().load(from: url)
+            }
+        } else if let account, let raw = account.skinURL, let url = URL(string: raw) {
             AsyncImage(url: url) { phase in
                 if let image = phase.image {
                     image

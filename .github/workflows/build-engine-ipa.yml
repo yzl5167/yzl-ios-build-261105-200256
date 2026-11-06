@@ -1,0 +1,106 @@
+name: Engine baseline (M2-b experiment)
+
+# M2-b：在 GitHub 托管 macOS runner 上从 Amethyst 上游源码构建引擎，
+# 实测 docs/POJAV-ENGINE-AUDIT.md §10 的两个待验证项：
+#   1. 托管 runner 能否装齐 cmake / ldid / JDK8 并跑通 make payload；
+#   2. 产物能否带 java_runtimes + Frameworks 全套 payload。
+# 第二阶段接线：构建 YZLUI.framework 并注入 payload（fork 补丁③的
+# 根视图 dlopen 未应用时，框架只是不被加载，无害）。
+# 设计与执行手册见 docs/M2B-ENGINE.md。
+
+on:
+  workflow_dispatch:
+    inputs:
+      amethyst_ref:
+        description: 'Amethyst pin（分支名 / SHA / tag）'
+        required: false
+        default: 'main'
+
+jobs:
+  build-engine:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Amethyst
+        run: |
+          git clone --depth 1 https://github.com/AngelAuraMC/Amethyst-iOS.git amethyst
+          cd amethyst
+          if [ -n "${{ inputs.amethyst_ref }}" ] && [ "${{ inputs.amethyst_ref }}" != "main" ]; then
+            git fetch --depth 1 origin "${{ inputs.amethyst_ref }}" || true
+            git checkout "${{ inputs.amethyst_ref }}" || echo "WARN: checkout 失败，使用 main"
+          fi
+          git rev-parse HEAD | tee ../amethyst-commit.txt
+
+      - name: Install toolchain
+        run: |
+          brew install cmake ldid coreutils xcodegen || brew upgrade cmake ldid coreutils xcodegen
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Apply YZL fork patches (best effort)
+        run: |
+          bash engine/apply-fork-patches.sh "$GITHUB_WORKSPACE/amethyst" || \
+            echo "::warning::补丁应用失败，基线按未打补丁构建"
+
+      # 先产 UI framework（不依赖引擎）。
+      - name: Build YZLUI framework
+        id: yzlui
+        continue-on-error: true
+        run: |
+          xcodegen generate
+          xcodebuild -project YZLLauncher.xcodeproj -target YZLUI -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee yzlui-build.log
+          FW=$(find ~/Library/Developer/Xcode/DerivedData -name "YZLUI.framework" -path "*Release-iphoneos*" -type d | head -1)
+          if [ -z "$FW" ]; then echo "::warning::YZLUI.framework 未找到"; exit 1; fi
+          echo "framework=$FW" >> "$GITHUB_OUTPUT"
+
+      # payload 目标组装 app 并签名，但不打 ipa zip——注入框架后我们自行打包。
+      - name: Build engine payload (make payload)
+        working-directory: amethyst
+        run: |
+          set -o pipefail
+          make -j"$(sysctl -n hw.ncpu)" payload RUNNER=1 TROLLSTORE_JIT_ENT=1 RELEASE=1 \
+            2>&1 | tee engine-build.log
+
+      - name: Inject YZLUI framework into payload
+        if: steps.yzlui.outputs.framework != ''
+        run: |
+          APP=$(find amethyst/artifacts -type d -name "AngelAuraAmethyst.app" | head -1)
+          if [ -z "$APP" ]; then echo "::warning::未找到 AngelAuraAmethyst.app，跳过注入"; exit 0; fi
+          mkdir -p "$APP/Frameworks"
+          cp -R "${{ steps.yzlui.outputs.framework }}" "$APP/Frameworks/"
+          # 框架二进制补伪签（与 payload 其余部分同一策略）
+          ldid -S "$APP/Frameworks/YZLUI.framework/YZLUI" || echo "::warning::YZLUI 伪签失败（TrollStore 可能拒载）"
+          echo "YZLUI.framework 已注入 $APP/Frameworks"
+
+      - name: Package tipa / ipa
+        run: |
+          mkdir -p dist
+          if [ -d amethyst/artifacts/Payload ]; then
+            cd amethyst/artifacts
+            zip -qry "$GITHUB_WORKSPACE/dist/YZL-engine.tipa" Payload
+            cp "$GITHUB_WORKSPACE/dist/YZL-engine.tipa" "$GITHUB_WORKSPACE/dist/YZL-engine-unsigned.ipa"
+            cd - >/dev/null
+          else
+            echo "::warning::Payload 目录不存在，只有日志可取"
+          fi
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          cp amethyst-commit.txt dist/ 2>/dev/null || true
+          find . -maxdepth 2 -name 'engine-build.log' -exec cp {} dist/ \; || true
+          find . -maxdepth 2 -name 'yzlui-build.log' -exec cp {} dist/ \; || true
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-build-${{ inputs.amethyst_ref || 'main' }}
+          path: dist/
+          if-no-files-found: warn
