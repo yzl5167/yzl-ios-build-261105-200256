@@ -47,12 +47,22 @@ YZLUI_FW=""
 if ( cd "$REPO_ROOT" && xcodegen generate && \
      xcodebuild -project YZLLauncher.xcodeproj -target YZLUI -configuration Release \
        -sdk iphoneos -destination 'generic/platform=iOS' \
+       -derivedDataPath "$REPO_ROOT/yzlui-dd" \
        CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$WORK/yzlui-build.log" ); then
-  YZLUI_FW="$(find ~/Library/Developer/Xcode/DerivedData -name 'YZLUI.framework' -path '*Release-iphoneos*' -type d | head -1)"
-  [ -n "$YZLUI_FW" ] || echo "[engine] WARN: YZLUI.framework 未找到，payload 将不含 YZL UI"
+  YZLUI_FW="$REPO_ROOT/yzlui-dd/Build/Products/Release-iphoneos/YZLUI.framework"
+  [ -d "$YZLUI_FW" ] || { echo "[engine] WARN: YZLUI.framework 未找到"; YZLUI_FW=""; }
 else
   echo "[engine] WARN: YZLUI 构建失败，payload 将不含 YZL UI"
 fi
+
+echo "[engine] 4.5/6 pre-stage JRE archives（RUNNER=1 时 Makefile 跳过下载）"
+mkdir -p "$WORK/amethyst/depends" && cd "$WORK/amethyst/depends"
+for v in 8 17 21 25; do
+  curl -fL --retry 3 "https://assets.angelauramc.dev/openjdk/ios-arm64/jre$v-ios-aarch64.zip" -o "jre$v-ios-aarch64.zip"
+  unzip -oq "jre$v-ios-aarch64.zip" && rm "jre$v-ios-aarch64.zip"
+  echo "jre$v staged"
+done
+cd "$WORK/amethyst"
 
 echo "[engine] 5/6 make payload (native + dep_mg + java + jre + payload)"
 make -j"$(sysctl -n hw.ncpu)" payload RUNNER=1 TROLLSTORE_JIT_ENT=1 RELEASE=1 2>&1 | tee "$WORK/build.log"
