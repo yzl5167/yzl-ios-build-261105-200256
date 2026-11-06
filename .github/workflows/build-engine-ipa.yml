@@ -180,6 +180,28 @@ jobs:
             BOOTJDK="$JAVA_HOME/bin" \
             2>&1 | tee engine-build.log
 
+      - name: Rebrand payload (YZL name + icon + bundle id)
+        run: |
+          APP=$(find amethyst/artifacts -type d -name "AngelAuraAmethyst.app" | head -1)
+          if [ -z "$APP" ]; then echo "::warning::未找到 app，跳过品牌重写"; exit 0; fi
+          PLIST="$APP/Info.plist"
+          plutil -replace CFBundleDisplayName -string "YZL Launcher" "$PLIST"
+          plutil -replace CFBundleName -string "YZL" "$PLIST"
+          plutil -replace CFBundleIdentifier -string "com.yzl.launcher" "$PLIST"
+          # 图标：仓库里的 YZL 1024 图标缩放出各尺寸 PNG，走 Info.plist 传统图标机制
+          ICON_SRC="$GITHUB_WORKSPACE/YZLLauncher/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          if [ -f "$ICON_SRC" ]; then
+            sips -z 120 120 "$ICON_SRC" --out "$APP/AppIcon60x60@2x.png" >/dev/null
+            sips -z 180 180 "$ICON_SRC" --out "$APP/AppIcon60x60@3x.png" >/dev/null
+            sips -z 152 152 "$ICON_SRC" --out "$APP/AppIcon76x76@2x~ipad.png" >/dev/null
+            sips -z 167 167 "$ICON_SRC" --out "$APP/AppIcon83.5x83.5@2x~ipad.png" >/dev/null
+            plutil -replace CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconFiles":["AppIcon60x60@2x","AppIcon60x60@3x"],"UIPrerenderedIcons":false}}' "$PLIST"
+            plutil -replace "CFBundleIcons~ipad" -json '{"CFBundlePrimaryIcon":{"CFBundleIconFiles":["AppIcon60x60@2x","AppIcon60x60@3x","AppIcon76x76@2x~ipad","AppIcon83.5x83.5@2x~ipad"],"UIPrerenderedIcons":false}}' "$PLIST"
+          fi
+          # Info.plist 变了，主二进制重新伪签（TrollStore entitlement 保持）
+          ldid -S$GITHUB_WORKSPACE/amethyst/entitlements.trollstore.xml "$APP/AngelAuraAmethyst"
+          echo "rebrand done: $(plutil -extract CFBundleDisplayName raw "$PLIST")"
+
       - name: Inject YZLUI framework into payload
         if: steps.yzlui.outputs.framework != ''
         run: |
