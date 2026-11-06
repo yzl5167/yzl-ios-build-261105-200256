@@ -76,7 +76,7 @@ jobs:
         working-directory: amethyst
         run: |
           mkdir -p depends && cd depends
-          for v in 8 17 21 25; do
+          for v in 8 17; do
             name="jre${v}-ios-aarch64"
             snap=$(curl -fsSL --max-time 30 "http://archive.org/wayback/available?url=assets.angelauramc.dev/openjdk/ios-arm64/${name}.zip" 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);c=d.get("archived_snapshots",{}).get("closest",{});print(c.get("timestamp",""))' 2>/dev/null || true)
             if [ -n "$snap" ]; then
@@ -97,11 +97,10 @@ jobs:
             fi
           done
 
-          # 来源 C：Zulu macOS aarch64 JRE 21/25 → vtool 平台改写为 iOS
-          # （Amethyst 自家 METHOD_CHANGE_PLAT 同款技术；mac 与 iOS 同为
-          #   arm64 Mach-O，核心原生库只链 libSystem/pthread/dl，iOS 全有）。
-          # 实验性质：真机验证 libjvm 可加载后转正；失败则启动面板如实标红，
-          # 不劣于空壳。
+          # 来源 C（实验性，默认关闭）：Zulu macOS aarch64 → iOS 平台改写。
+          # 第十二/十三轮的「无法安装」疑似与改写后的 dylib 有关，先回退定位。
+          # 需要时用 workflow_dispatch inputs 传 zulu_jre=1 启用。
+          if [ "${{ inputs.zulu_jre }}" = "1" ]; then
           for v in 21 25; do
             if [ -f "java-${v}-openjdk/release" ]; then continue; fi
             echo "source C: Zulu macOS aarch64 JRE $v -> iOS platform flip"
@@ -127,6 +126,7 @@ jobs:
               echo "  zulu download FAILED for $v"
             fi
           done
+          fi
 
           # 来源 B：PojavLauncher iOS v2.2（GitHub 活源，103 MB）——解出内置
           # java_runtimes，按版本重排进 depends/java-N-openjdk。放有 release
@@ -187,7 +187,8 @@ jobs:
           PLIST="$APP/Info.plist"
           plutil -replace CFBundleDisplayName -string "YZL Launcher" "$PLIST"
           plutil -replace CFBundleName -string "YZL" "$PLIST"
-          plutil -replace CFBundleIdentifier -string "com.yzl.launcher" "$PLIST"
+          # Bundle ID 保持上游原值（第十三轮改 id 后出现无法安装，先回退排除；
+          # Bundle ID 对用户不可见）
           # 图标：仓库里的 YZL 1024 图标缩放出各尺寸 PNG，走 Info.plist 传统图标机制
           ICON_SRC="$GITHUB_WORKSPACE/YZLLauncher/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
           if [ -f "$ICON_SRC" ]; then
