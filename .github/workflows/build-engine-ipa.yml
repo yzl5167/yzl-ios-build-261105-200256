@@ -72,7 +72,7 @@ jobs:
       # 改从 Wayback Machine 逐版本探测下载；缺失版本放空 tar.xz 兜底
       # （保证 payload 必出包，JRE 缺口由启动面板如实暴露，后续可经
       #   fork 的 JRE 管理界面手动导入 tar.xz）。
-      - name: Pre-stage JRE archives (wayback + fallback)
+      - name: Pre-stage JRE archives (wayback + Pojav + fallback)
         working-directory: amethyst
         run: |
           mkdir -p depends && cd depends
@@ -95,8 +95,54 @@ jobs:
             else
               echo "jre$v: no wayback snapshot"
             fi
-            if ! ls jre${v}-*.tar.xz >/dev/null 2>&1; then
-              echo "jre$v: EMPTY FALLBACK tar.xz（该运行时缺席，启动面板会如实标红）"
+          done
+
+          # 来源 B：PojavLauncher iOS v2.2（GitHub 活源，103 MB）——解出内置
+          # java_runtimes，按版本重排进 depends/java-N-openjdk。放有 release
+          # 标记文件的目录会被 METHOD_JAVA_UNPACK 整体跳过，故只放目录。
+          if [ ! -f java-8-openjdk/release ]; then
+            echo "source B: extracting JREs from PojavLauncher iOS v2.2..."
+            curl -fL --retry 3 --max-time 900 \
+              "https://github.com/PojavLauncherTeam/PojavLauncher_iOS/releases/download/v2.2/net.kdt.pojavlauncher-2.2-ios.ipa" \
+              -o pojav22.ipa || echo "pojav download FAILED"
+            if [ -f pojav22.ipa ]; then
+              unzip -oq pojav22.ipa -d pojav-x || true
+              rm -f pojav22.ipa
+              for jli in $(find pojav-x -type f -name libjli.dylib); do
+                libdir=$(dirname "$jli")
+                if [ "$(basename "$libdir")" = "jli" ]; then
+                  root=$(dirname "$libdir"); major=8
+                else
+                  root=$(dirname "$libdir")
+                  major=$(python3 -c "
+import re
+try:
+    rel = open('$root/release', encoding='utf-8', errors='ignore').read()
+    m = re.search(r'JAVA_VERSION=\"([0-9\.]+)', rel)
+    v = m.group(1) if m else '17'
+    if v.startswith('1.'): v = v.split('.')[1]
+    print(v.split('.')[0])
+except Exception:
+    print('17')
+")
+                fi
+                case "$major" in
+                  8|17|21|25)
+                    if [ ! -f "java-${major}-openjdk/release" ]; then
+                      rm -rf "java-${major}-openjdk"
+                      cp -R "$root" "java-${major}-openjdk"
+                      echo "jre$major: extracted from Pojav ipa ($(du -sh "java-${major}-openjdk" | cut -f1))"
+                    fi ;;
+                esac
+              done
+              rm -rf pojav-x
+            fi
+          fi
+
+          # 兜底：仍缺席的版本放空 tar.xz（保证出包，缺口由启动面板标红）
+          for v in 8 17 21 25; do
+            if ! ls jre${v}-*.tar.xz >/dev/null 2>&1 && [ ! -f "java-${v}-openjdk/release" ]; then
+              echo "jre$v: EMPTY FALLBACK tar.xz（该运行时缺席，可后续经 JRE 管理界面导入）"
               tar cfJ "jre${v}-ios-aarch64.tar.xz" -T /dev/null
             fi
           done
