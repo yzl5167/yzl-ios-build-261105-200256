@@ -25,7 +25,9 @@ jobs:
 
       - name: Checkout Amethyst
         run: |
-          git clone --depth 1 https://github.com/AngelAuraMC/Amethyst-iOS.git amethyst
+          # MobileGlues 等是 git 子模块，必须一并拉取，否则 CMake 报源目录不存在
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/AngelAuraMC/Amethyst-iOS.git amethyst
           cd amethyst
           if [ -n "${{ inputs.amethyst_ref }}" ] && [ "${{ inputs.amethyst_ref }}" != "main" ]; then
             git fetch --depth 1 origin "${{ inputs.amethyst_ref }}" || true
