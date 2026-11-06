@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 import ObjectiveC
-import dlfcn
+import Darwin
 
 /// M2-b 运行时桥：在 Amethyst fork 进程内，由 YZL UI（YZLUI.framework）
 /// 驱动引擎启动。
