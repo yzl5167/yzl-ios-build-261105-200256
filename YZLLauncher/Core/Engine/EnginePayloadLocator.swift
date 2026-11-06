@@ -59,9 +59,10 @@ enum EnginePayloadLocator {
 
         var javaRuntimeNames: [String] {
             guard let runtimes = component(.javaRuntimes), runtimes.isPresent else { return [] }
+            // String.split(separator:) 的字符串分隔符重载是 iOS 16+，用 Foundation 的 components
             return runtimes.detail
-                .split(separator: ", ")
-                .map(String.init)
+                .components(separatedBy: ", ")
+                .filter { !$0.isEmpty }
         }
 
         var frameworkCount: Int {
