@@ -69,8 +69,8 @@ done
 ENTRY_DIR="$AMETHYST_DIR/JavaApp/src/launcher/net/kdt/pojavlaunch/yzl"
 mkdir -p "$ENTRY_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$SCRIPT_DIR/yzl/YZLGameEntry.java" ]; then
-  cp "$SCRIPT_DIR/yzl/YZLGameEntry.java" "$ENTRY_DIR/YZLGameEntry.java"
+if [ -f "$SCRIPT_DIR/fork-patches/yzl/YZLGameEntry.java" ]; then
+  cp "$SCRIPT_DIR/fork-patches/yzl/YZLGameEntry.java" "$ENTRY_DIR/YZLGameEntry.java"
   echo "[patch] YZLGameEntry.java 已放置"
 else
   echo "[patch] WARN: engine/fork-patches/yzl/YZLGameEntry.java 缺失，YZL 启动分支会编译失败"
