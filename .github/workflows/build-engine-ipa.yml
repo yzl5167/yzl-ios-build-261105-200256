@@ -61,9 +61,9 @@ jobs:
           xcodegen generate
           xcodebuild -project YZLLauncher.xcodeproj -target YZLUI -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath "$GITHUB_WORKSPACE/yzlui-dd" \
+            SYMROOT="$GITHUB_WORKSPACE/yzlui-sym" \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee yzlui-build.log
-          FW="$GITHUB_WORKSPACE/yzlui-dd/Build/Products/Release-iphoneos/YZLUI.framework"
+          FW="$GITHUB_WORKSPACE/yzlui-sym/Release-iphoneos/YZLUI.framework"
           if [ ! -d "$FW" ]; then echo "::warning::YZLUI.framework 未找到"; exit 1; fi
           echo "framework=$FW" >> "$GITHUB_OUTPUT"
 
