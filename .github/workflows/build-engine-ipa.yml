@@ -18,7 +18,9 @@ on:
 
 jobs:
   build-engine:
-    runs-on: macos-15
+    # 上游 Amethyst main 已使用 iOS 26 SDK 专属 API（如 UIBarButtonItem.sharesBackground，
+    # Xcode 26 才有），macos-15 的 Xcode 16.4 编不过——用 macos-26 镜像（自带 Xcode 26）
+    runs-on: macos-26
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
