@@ -79,31 +79,42 @@ struct YZLEngineHost: LauncherEngine {
         setenv("GAME_DIR", plan.gameDirectory.path, 1)
         setenv("JAVA_HOME", javaHome.path, 1)
 
-        // 3. launchJVM(username, launchTarget, width, height, minVersion)。
+        // 3. 呈现游戏画面（fork 的 SurfaceViewController，运行时 msgSend
+        //    `initWithMetadata:`——真签名见 Natives/SurfaceViewController.m:66；
+        //    随后按 Amethyst 桥 UIKit_launchMinecraftSurfaceVC 的模式替换
+        //    keyWindow 根控制器）。必须在 JVM 启动之前完成。
+        let minJava = Int32(document.javaMajor)
+        let metadata: NSDictionary = [
+            "javaVersion": ["majorVersion": document.javaMajor]
+        ]
+        await presentGameSurface(metadata: metadata)
+
+        // 4. launchJVM(username, launchTarget, width, height, minVersion)。
+        //    JLI_Launch 阻塞当前线程直到游戏退出——必须离开主线程
+        //    （Amethyst 原生流程同样从后台线程调用）。
         //    launchTarget 走字典（profile 模式）；fork 的 PojavLauncher 补丁读
         //    YZL_LAUNCH_PLAN，这里只带版本 id 与空 jvm_processed。
-        //    前两个参数都是 ObjC 对象指针（NSString* / NSDictionary*），
-        //    用 Unmanaged 透传（launchJVM 不越过本次调用持有它们）；
-        //    ObjC 运行时触碰 UI 状态，固定在主线程执行。
         typealias LaunchJVM = @convention(c) (UnsafeRawPointer?, UnsafeRawPointer?, Int32, Int32, Int32) -> Int32
         let launch = unsafeBitCast(launchSymbol, to: LaunchJVM.self)
         let username = plan.accountName
-        let minJava = Int32(document.javaMajor)
 
-        let exitCode: Int32 = await MainActor.run {
-            let nsName = username as NSString
-            let target: NSDictionary = [
-                "id": plan.version.id,
-                "arguments": ["jvm_processed": NSArray()]
-            ]
-            return launch(
-                Unmanaged.passUnretained(nsName).toOpaque(),
-                Unmanaged.passUnretained(target).toOpaque(),
-                0, 0, minJava
-            )
+        let exitCode: Int32 = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let nsName = username as NSString
+                let target: NSDictionary = [
+                    "id": plan.version.id,
+                    "arguments": ["jvm_processed": NSArray()]
+                ]
+                let code = launch(
+                    Unmanaged.passUnretained(nsName).toOpaque(),
+                    Unmanaged.passUnretained(target).toOpaque(),
+                    0, 0, minJava
+                )
+                continuation.resume(returning: code)
+            }
         }
 
-        // 4. 契约文件含令牌，启动流程已交接即删。
+        // 5. 契约文件含令牌，启动流程已交接即删。
         EngineLaunchContract.remove(homeDirectory: home)
 
         if exitCode != 0 {
@@ -113,22 +124,32 @@ struct YZLEngineHost: LauncherEngine {
 
     // MARK: - 游戏画面
 
-    /// fork 的 SurfaceViewController 是 ObjC 类，编译期不引用；
-    /// 运行时 objc_getClass + init 呈现。找不到则跳过（JVM 照常启动，
-    /// 只是无画面——用于引擎链路的头级验证）。fork 首编时按
-    /// SurfaceViewController.h 的实际初始化签名核对（见 fork 补丁 3 TODO）。
+    /// fork 的 SurfaceViewController 是 ObjC 类，编译期不引用。
+    /// 运行时 objc_msgSend 调 `initWithMetadata:`（真签名），随后替换
+    /// keyWindow 根控制器——与 Amethyst 桥 UIKit_launchMinecraftSurfaceVC
+    /// 的模式一致（游戏退出由其 returnToSplitView 恢复）。
     @MainActor
-    private func presentGameSurface() {
-        guard let surfaceClass = classLookup("SurfaceViewController") as? UIViewController.Type else {
+    private func presentGameSurface(metadata: NSDictionary) async {
+        guard let surfaceClass = classLookup("SurfaceViewController") else {
             return
         }
-        let surface = surfaceClass.init()
+        // objc_msgSend 本身也是运行时符号，dlsym 取用
+        guard let msgSendSymbol = dlsym(nil, "objc_msgSend") else { return }
+        typealias MsgSend = @convention(c) (AnyObject, Selector, Any?) -> UnsafeRawPointer?
+        let msgSend = unsafeBitCast(msgSendSymbol, to: MsgSend.self)
+
+        let allocator = (surfaceClass as NSObject.Type).alloc()
+        let initialized = msgSend(allocator, NSSelectorFromString("initWithMetadata:"), metadata)
+        guard initialized != nil else { return }
+
+        let surface = Unmanaged<AnyObject>.fromOpaque(initialized).takeRetainedValue()
+        guard let surfaceVC = surface as? UIViewController else { return }
+
         let keyWindow = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow }
-        surface.modalPresentationStyle = .fullScreen
-        keyWindow?.rootViewController?.present(surface, animated: false)
+        keyWindow?.rootViewController = surfaceVC
     }
 
     // MARK: - 令牌传递
