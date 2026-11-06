@@ -17,8 +17,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'echo "[engine] workdir kept: $WORK"' EXIT
 
-echo "[engine] 1/6 clone Amethyst @ $AMETHYST_REF"
-git clone "$AMETHYST_REPO" "$WORK/amethyst"
+echo "[engine] 1/6 clone Amethyst @ $AMETHYST_REF（含子模块 MobileGlues 等）"
+git clone --depth 1 --recurse-submodules --shallow-submodules "$AMETHYST_REPO" "$WORK/amethyst"
 cd "$WORK/amethyst"
 git fetch --depth 1 origin "$AMETHYST_REF" 2>/dev/null || true
 git checkout "$AMETHYST_REF" 2>/dev/null || echo "[engine] WARN: checkout $AMETHYST_REF 失败，使用默认分支"
