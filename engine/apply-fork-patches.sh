@@ -78,4 +78,34 @@ else
   echo "[patch] WARN: engine/fork-patches/yzl/YZLGameEntry.java 缺失，YZL 启动分支会编译失败"
 fi
 
+# 上游兼容补丁：新版 Xcode（macos-15 runner 的 clang）把隐式函数声明当错误，
+# JavaLauncher.m 用了 Mach 异步端口 API 但没 include mach/mach.h
+# （上游自托管越狱机的旧 Xcode 只给 warning）。
+JL="$AMETHYST_DIR/Natives/JavaLauncher.m"
+if [ -f "$JL" ]; then
+  if grep -q "#include <mach/mach.h>" "$JL"; then
+    echo "[patch] JavaLauncher.m 已含 mach/mach.h，跳过"
+  else
+    python3 - "$JL" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    src = f.read()
+needle = '#include "JavaLauncher.h"'
+if needle not in src:
+    sys.exit("JavaLauncher.h include 未找到，上游结构变化，需人工核对")
+src = src.replace(
+    needle,
+    "#include <mach/mach.h>  /* YZL fork: new Xcode rejects implicit decls (task_set_exception_ports/mach_task_self) */\n" + needle,
+    1,
+)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(src)
+print("[patch] JavaLauncher.m: mach/mach.h 已补")
+PY
+  fi
+else
+  echo "[patch] WARN: Natives/JavaLauncher.m 不存在"
+fi
+
 echo "[patch] done"
