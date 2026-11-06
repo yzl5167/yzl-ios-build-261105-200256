@@ -53,7 +53,7 @@ enum EnginePayloadLocator {
         }
 
         // 便捷读取
-        private var component(_ kind: Component.Kind) -> Component? {
+        private func component(_ kind: Component.Kind) -> Component? {
             components.first { $0.kind == kind }
         }
 
