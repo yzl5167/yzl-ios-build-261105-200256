@@ -47,9 +47,9 @@ YZLUI_FW=""
 if ( cd "$REPO_ROOT" && xcodegen generate && \
      xcodebuild -project YZLLauncher.xcodeproj -target YZLUI -configuration Release \
        -sdk iphoneos -destination 'generic/platform=iOS' \
-       -derivedDataPath "$REPO_ROOT/yzlui-dd" \
+       SYMROOT="$REPO_ROOT/yzlui-sym" \
        CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$WORK/yzlui-build.log" ); then
-  YZLUI_FW="$REPO_ROOT/yzlui-dd/Build/Products/Release-iphoneos/YZLUI.framework"
+  YZLUI_FW="$REPO_ROOT/yzlui-sym/Release-iphoneos/YZLUI.framework"
   [ -d "$YZLUI_FW" ] || { echo "[engine] WARN: YZLUI.framework 未找到"; YZLUI_FW=""; }
 else
   echo "[engine] WARN: YZLUI 构建失败，payload 将不含 YZL UI"
