@@ -26,7 +26,7 @@ branch = needle + '''
     // ---- YZL branch: fully-resolved launch plan from the YZL launcher UI ----
     String yzlPlanPath = System.getenv("YZL_LAUNCH_PLAN");
     if (yzlPlanPath != null && !yzlPlanPath.isEmpty()) {
-        net.kdt.pojavlaunch.yzl.YZLGameEntry.launch(new File(yzlPlanPath));
+        YZLGameEntry.launch(new File(yzlPlanPath));
         return;
     }
 '''
@@ -66,12 +66,14 @@ PY
 done
 
 # YZLGameEntry.java（fork 桥的 Java 侧实现，独立文件，直接落盘）
-ENTRY_DIR="$AMETHYST_DIR/JavaApp/src/launcher/net/kdt/pojavlaunch/yzl"
+# 必须落在 net.kdt.pojavlaunch 包内：PojavClassLoader 的
+# appendToClassPathForInstrumentation 是 protected，跨包访问不了。
+ENTRY_DIR="$AMETHYST_DIR/JavaApp/src/launcher/net/kdt/pojavlaunch"
 mkdir -p "$ENTRY_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/fork-patches/yzl/YZLGameEntry.java" ]; then
   cp "$SCRIPT_DIR/fork-patches/yzl/YZLGameEntry.java" "$ENTRY_DIR/YZLGameEntry.java"
-  echo "[patch] YZLGameEntry.java 已放置"
+  echo "[patch] YZLGameEntry.java 已放置（net.kdt.pojavlaunch 包）"
 else
   echo "[patch] WARN: engine/fork-patches/yzl/YZLGameEntry.java 缺失，YZL 启动分支会编译失败"
 fi
