@@ -67,17 +67,40 @@ jobs:
           if [ ! -d "$FW" ]; then echo "::warning::YZLUI.framework 未找到"; exit 1; fi
           echo "framework=$FW" >> "$GITHUB_OUTPUT"
 
-      # RUNNER=1 时 Amethyst 的 METHOD_JAVA_UNPACK 有意跳过下载（依赖预置压缩包），
-      # 所以这里把 4 个 JRE 包预先放到 depends/（zip 内含 tar.xz，Makefile 后续自己解）。
-      - name: Pre-stage JRE archives
+      # RUNNER=1 时 Amethyst 的 METHOD_JAVA_UNPACK 有意跳过下载（依赖预置压缩包）。
+      # 原 CDN assets.angelauramc.dev 已死（动态 DNS 别名失效，2026-11-06 实测），
+      # 改从 Wayback Machine 逐版本探测下载；缺失版本放空 tar.xz 兜底
+      # （保证 payload 必出包，JRE 缺口由启动面板如实暴露，后续可经
+      #   fork 的 JRE 管理界面手动导入 tar.xz）。
+      - name: Pre-stage JRE archives (wayback + fallback)
         working-directory: amethyst
         run: |
           mkdir -p depends && cd depends
           for v in 8 17 21 25; do
-            curl -fL --retry 3 "https://assets.angelauramc.dev/openjdk/ios-arm64/jre$v-ios-aarch64.zip" -o "jre$v-ios-aarch64.zip"
-            unzip -oq "jre$v-ios-aarch64.zip" && rm "jre$v-ios-aarch64.zip"
-            echo "jre$v staged: $(ls)"
+            name="jre${v}-ios-aarch64"
+            snap=$(curl -fsSL --max-time 30 "http://archive.org/wayback/available?url=assets.angelauramc.dev/openjdk/ios-arm64/${name}.zip" 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);c=d.get("archived_snapshots",{}).get("closest",{});print(c.get("timestamp",""))' 2>/dev/null || true)
+            if [ -n "$snap" ]; then
+              echo "jre$v: wayback snapshot $snap, downloading..."
+              if curl -fL --retry 3 --max-time 900 "https://web.archive.org/web/${snap}id_/https://assets.angelauramc.dev/openjdk/ios-arm64/${name}.zip" -o "${name}.zip"; then
+                unzip -oq "${name}.zip" || true
+                rm -f "${name}.zip"
+                if ! ls jre${v}-*.tar.xz >/dev/null 2>&1; then
+                  if [ -d "${name}" ]; then tar cfJ "${name}.tar.xz" "${name}";
+                  elif [ -d "java-${v}-openjdk" ]; then tar cfJ "${name}.tar.xz" "java-${v}-openjdk"; fi
+                fi
+                echo "jre$v: wayback OK"
+              else
+                echo "jre$v: wayback download FAILED"
+              fi
+            else
+              echo "jre$v: no wayback snapshot"
+            fi
+            if ! ls jre${v}-*.tar.xz >/dev/null 2>&1; then
+              echo "jre$v: EMPTY FALLBACK tar.xz（该运行时缺席，启动面板会如实标红）"
+              tar cfJ "jre${v}-ios-aarch64.tar.xz" -T /dev/null
+            fi
           done
+          ls -la
 
       # payload 目标组装 app 并签名，但不打 ipa zip——注入框架后我们自行打包。
       - name: Build engine payload (make payload)
