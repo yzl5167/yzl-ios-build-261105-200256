@@ -114,17 +114,7 @@ jobs:
                   root=$(dirname "$libdir"); major=8
                 else
                   root=$(dirname "$libdir")
-                  major=$(python3 -c "
-import re
-try:
-    rel = open('$root/release', encoding='utf-8', errors='ignore').read()
-    m = re.search(r'JAVA_VERSION=\"([0-9\.]+)', rel)
-    v = m.group(1) if m else '17'
-    if v.startswith('1.'): v = v.split('.')[1]
-    print(v.split('.')[0])
-except Exception:
-    print('17')
-")
+                  major=$(python3 -c "import re,os,sys; p=os.path.join(sys.argv[1],'release'); rel=(open(p,encoding='utf-8',errors='ignore').read() if os.path.isfile(p) else ''); m=re.search(r'JAVA_VERSION=\"([0-9.]+)', rel); v=(m.group(1) if m else '17'); v=(v.split('.')[1] if v.startswith('1.') else v); print(v.split('.')[0])" "$root")
                 fi
                 case "$major" in
                   8|17|21|25)
