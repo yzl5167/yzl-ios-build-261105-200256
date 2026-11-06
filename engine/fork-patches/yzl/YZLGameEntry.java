@@ -1,4 +1,4 @@
-package net.kdt.pojavlaunch.yzl;
+package net.kdt.pojavlaunch;
 
 import java.io.File;
 import java.lang.reflect.Method;
@@ -6,13 +6,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
 
-import net.kdt.pojavlaunch.PojavClassLoader;
-
 /**
  * M2-b fork 桥的 Java 侧：读取 YZL 启动器生成的完整启动计划
  * （$AME_HOME/yzl-launch-plan.json，字段契约见 YZL 仓库
  * Core/Engine/EngineLaunchContract.swift），用 Amethyst 既有的
  * PojavClassLoader + 反射 main 机制在进程内拉起游戏。
+ *
+ * 注意：必须在 net.kdt.pojavlaunch 包内（不能开 yzl 子包）——
+ * PojavClassLoader.appendToClassPathForInstrumentation 是 protected，
+ * 同包才能访问（Tools.launchMinecraft 就是这么用的）。
  *
  * 与原 Tools.launchMinecraft 的差异：mainClass / classpath / 游戏参数
  * 全部来自 YZL 侧解析（LaunchPlanBuilder / ArgumentResolver），不再读取
