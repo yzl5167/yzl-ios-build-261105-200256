@@ -91,12 +91,13 @@ import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     src = f.read()
-needle = '#include "JavaLauncher.h"'
+needle = '#import "JavaLauncher.h"'
 if needle not in src:
-    sys.exit("JavaLauncher.h include 未找到，上游结构变化，需人工核对")
+    sys.exit("JavaLauncher.h import 未找到，上游结构变化，需人工核对")
 src = src.replace(
     needle,
-    "#include <mach/mach.h>  /* YZL fork: new Xcode rejects implicit decls (task_set_exception_ports/mach_task_self) */\n" + needle,
+    "#include <mach/mach.h>      /* YZL fork: task_set_exception_ports */\n"
+    "#include <mach/mach_init.h> /* YZL fork: mach_task_self (new Xcode rejects implicit decls) */\n" + needle,
     1,
 )
 with open(path, "w", encoding="utf-8") as f:
