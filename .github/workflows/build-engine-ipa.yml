@@ -52,7 +52,8 @@ jobs:
           bash engine/apply-fork-patches.sh "$GITHUB_WORKSPACE/amethyst" || \
             echo "::warning::补丁应用失败，基线按未打补丁构建"
 
-      # 先产 UI framework（不依赖引擎）。
+      # 先产 UI framework（不依赖引擎）。-target 式构建产物默认在项目内 build/，
+      # 显式 -derivedDataPath 让产物路径可预测。
       - name: Build YZLUI framework
         id: yzlui
         continue-on-error: true
@@ -60,10 +61,23 @@ jobs:
           xcodegen generate
           xcodebuild -project YZLLauncher.xcodeproj -target YZLUI -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/yzlui-dd" \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee yzlui-build.log
-          FW=$(find ~/Library/Developer/Xcode/DerivedData -name "YZLUI.framework" -path "*Release-iphoneos*" -type d | head -1)
-          if [ -z "$FW" ]; then echo "::warning::YZLUI.framework 未找到"; exit 1; fi
+          FW="$GITHUB_WORKSPACE/yzlui-dd/Build/Products/Release-iphoneos/YZLUI.framework"
+          if [ ! -d "$FW" ]; then echo "::warning::YZLUI.framework 未找到"; exit 1; fi
           echo "framework=$FW" >> "$GITHUB_OUTPUT"
+
+      # RUNNER=1 时 Amethyst 的 METHOD_JAVA_UNPACK 有意跳过下载（依赖预置压缩包），
+      # 所以这里把 4 个 JRE 包预先放到 depends/（zip 内含 tar.xz，Makefile 后续自己解）。
+      - name: Pre-stage JRE archives
+        working-directory: amethyst
+        run: |
+          mkdir -p depends && cd depends
+          for v in 8 17 21 25; do
+            curl -fL --retry 3 "https://assets.angelauramc.dev/openjdk/ios-arm64/jre$v-ios-aarch64.zip" -o "jre$v-ios-aarch64.zip"
+            unzip -oq "jre$v-ios-aarch64.zip" && rm "jre$v-ios-aarch64.zip"
+            echo "jre$v staged: $(ls)"
+          done
 
       # payload 目标组装 app 并签名，但不打 ipa zip——注入框架后我们自行打包。
       - name: Build engine payload (make payload)
