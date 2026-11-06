@@ -109,4 +109,54 @@ else
   echo "[patch] WARN: Natives/JavaLauncher.m 不存在"
 fi
 
+# ---- YZL fork 补丁③：SceneDelegate 根视图让位给 YZL UI ----
+# Amethyst 的根装配在 SceneDelegate.m 的 launchInitialViewController(self.window)。
+# 在其之前尝试 dlopen YZLUI.framework：命中 YZLUIRootController 就接管根视图，
+# 未命中（无框架）继续走原生 UI，永不卡死。
+SD="$AMETHYST_DIR/Natives/SceneDelegate.m"
+if [ -f "$SD" ]; then
+  if grep -q "YZLUIRootController" "$SD"; then
+    echo "[patch] SceneDelegate.m 已含 YZL 注入，跳过"
+  else
+    python3 - "$SD" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    src = f.read()
+
+call_needle = "launchInitialViewController(self.window);"
+if call_needle not in src:
+    sys.exit("launchInitialViewController 调用未找到，上游结构变化，需人工核对")
+
+# 文件头补 dlfcn（dlopen 需要；ObjC 的 #import 必须在文件作用域）
+import_needle = '#import "utils.h"'
+if "#include <dlfcn.h>" not in src and "#import <dlfcn.h>" not in src:
+    if import_needle in src:
+        src = src.replace(import_needle, import_needle + '\n#include <dlfcn.h>', 1)
+
+injection = '''    // ---- YZL UI injection (M2-b patch 3) ----
+    {
+        NSString *yzlFrameworkPath = [NSBundle.mainBundle.privateFrameworksPath
+            stringByAppendingPathComponent:@"YZLUI.framework/YZLUI"];
+        void *yzlHandle = dlopen(yzlFrameworkPath.fileSystemRepresentation, RTLD_LAZY);
+        Class yzlRootClass = yzlHandle ? NSClassFromString(@"YZLUIRootController") : nil;
+        if (yzlRootClass) {
+            UIViewController *yzlRoot = [yzlRootClass new];
+            self.window.rootViewController = yzlRoot;
+            NSLog(@"[YZL] YZLUI.framework loaded, YZL UI takes over");
+            return;
+        }
+        NSLog(@"[YZL] YZLUI.framework not present, falling back to Amethyst UI");
+    }
+'''
+src = src.replace(call_needle, injection + call_needle, 1)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(src)
+print("[patch] SceneDelegate.m: YZL UI 注入点已插入")
+PY
+  fi
+else
+  echo "[patch] WARN: Natives/SceneDelegate.m 不存在"
+fi
+
 echo "[patch] done"
